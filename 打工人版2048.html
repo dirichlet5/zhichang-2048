@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>职场2048：从“牛马”到“董事长”</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #faf8ef;
+            color: #776e65;
+            font-family: "Helvetica Neue", Arial, sans-serif;
+            touch-action: none; /* 防止在游戏区域滑动时触发页面滚动 */
+        }
+        
+        .game-container {
+            width: 100%;
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        /* 游戏主容器设置为相对定位，作为绝对定位子元素的参考点 */
+        .grid-container {
+            background-color: #bbada0;
+            border-radius: 6px;
+            padding: 10px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            aspect-ratio: 1 / 1;
+            position: relative; /* 关键改动 */
+        }
+
+        /* 背景网格单元格，现在只负责显示背景色 */
+        .grid-cell {
+            background-color: #cdc1b4;
+            border-radius: 4px;
+            z-index: 1; /* 层级较低 */
+        }
+
+        /* 新增：专门用来放置移动方块的容器 */
+        .tile-container {
+            position: absolute;
+            top: 10px; left: 10px; right: 10px; bottom: 10px; /* 匹配 grid-container 的 padding */
+            z-index: 5; /* 浮在背景网格之上 */
+            pointer-events: none; /* 让点击事件穿透到底层 */
+        }
+
+        /* 新增：实际移动的方块样式 */
+        .tile {
+            position: absolute;
+            /* 宽度和高度稍后在JS中动态计算 */
+            border-radius: 4px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: bold;
+            text-align: center;
+            line-height: 1.1;
+            /* 核心改动：添加这两个属性的过渡效果来实现滑动 */
+            transition: top 0.15s ease-in-out, left 0.15s ease-in-out, background-color 0.15s ease-in-out, color 0.15s ease-in-out;
+            will-change: top, left;
+        }
+
+        /* 动画效果 */
+        /* 新出现的方块使用 scale 动画 */
+        .tile-new {
+            animation: appear 0.2s ease-in-out backwards;
+        }
+        
+        /* 合并成功的方块使用 pop 动画 */
+        .tile-merged {
+            animation: pop 0.2s ease-in-out backwards;
+            z-index: 10; /* 合并时的方块层级更高一点 */
+        }
+
+        @keyframes appear {
+            0% { opacity: 0; transform: scale(0); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        @keyframes pop {
+            0% { transform: scale(0.8); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
+        /* 覆盖层 */
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(238, 228, 218, 0.73);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20; /* 最高层级 */
+            border-radius: 6px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <!-- 头部区域 -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-4xl md:text-5xl font-extrabold text-[#776e65]">职场2048</h1>
+        <div class="flex gap-2">
+            <div class="bg-[#bbada0] rounded px-4 py-2 text-center min-w-[70px]">
+                <div class="text-[#eee4da] text-xs font-bold uppercase">分数</div>
+                <div class="text-white font-bold text-lg leading-tight" id="score">0</div>
+            </div>
+            <div class="bg-[#bbada0] rounded px-4 py-2 text-center min-w-[70px]">
+                <div class="text-[#eee4da] text-xs font-bold uppercase">最高分</div>
+                <div class="text-white font-bold text-lg leading-tight" id="best-score">0</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏说明和控制栏 -->
+    <div class="flex justify-between items-end mb-6">
+        <p class="text-sm md:text-base text-gray-600 w-2/3">
+            合并相同的职级，一路晋升，最终成为 <strong>董事长</strong>！<br/>
+            (方向键或滑动屏幕控制)
+        </p>
+        <button id="restart-btn" class="bg-[#8f7a66] hover:bg-[#9f8b77] text-white font-bold py-2 px-4 rounded transition-colors">
+            重新开始
+        </button>
+    </div>
+
+    <!-- 游戏主体 -->
+    <div class="grid-container" id="grid-container">
+        <!-- 覆盖层 -->
+        <div id="game-over-overlay" class="overlay">
+            <h2 class="text-4xl font-bold text-[#776e65] mb-4" id="game-over-title">游戏结束!</h2>
+            <p class="text-lg text-[#776e65] mb-4" id="game-over-subtitle">你的职场生涯止步于此</p>
+            <button id="retry-btn" class="bg-[#8f7a66] hover:bg-[#9f8b77] text-white font-bold py-3 px-6 rounded text-lg">
+                再试一次
+            </button>
+        </div>
+        
+        <!-- 背景网格 (16个空格子) -->
+        <!-- JS动态生成 -->
+        
+        <!-- 新增：移动方块的容器 -->
+        <div id="tile-container" class="tile-container"></div>
+    </div>
+</div>
+
+<script>
+    // 职级配置
+    const LEVELS = [
+        "",         // 0: 空
+        "牛",       // 1: 2
+        "马",       // 2: 4
+        "马仔",     // 3: 8
+        "打工人",   // 4: 16
+        "高级打工人", // 5: 32
+        "副主管",   // 6: 64
+        "主管",     // 7: 128
+        "高级主管", // 8: 256
+        "副总裁",   // 9: 512
+        "总裁",     // 10: 1024
+        "董事长"    // 11: 2048
+    ];
+
+    // 样式配置表
+    const LEVEL_STYLES = {
+        0: { bg: '#cdc1b4', text: '' },
+        1: { bg: '#eee4da', text: '#776e65', sizeClass: 'text-4xl' },
+        2: { bg: '#ede0c8', text: '#776e65', sizeClass: 'text-4xl' },
+        3: { bg: '#f2b179', text: '#f9f6f2', sizeClass: 'text-3xl' },
+        4: { bg: '#f59563', text: '#f9f6f2', sizeClass: 'text-2xl md:text-3xl' },
+        5: { bg: '#f67c5f', text: '#f9f6f2', sizeClass: 'text-lg md:text-xl' },
+        6: { bg: '#f65e3b', text: '#f9f6f2', sizeClass: 'text-2xl md:text-3xl' },
+        7: { bg: '#edcf72', text: '#f9f6f2', sizeClass: 'text-3xl' },
+        8: { bg: '#edcc61', text: '#f9f6f2', sizeClass: 'text-xl md:text-2xl' },
+        9: { bg: '#edc850', text: '#f9f6f2', sizeClass: 'text-2xl md:text-3xl' },
+        10: { bg: '#edc53f', text: '#f9f6f2', sizeClass: 'text-3xl' },
+        11: { bg: '#edc22e', text: '#f9f6f2', sizeClass: 'text-2xl md:text-3xl', shadow: '0 0 10px rgba(243, 215, 116, 0.5)' }
+    };
+
+    // 游戏状态
+    // board 现在存储的是对象 { value: 1, id: uniqueId, isNew: boolean, isMerged: boolean } 或 null
+    let board = []; 
+    let score = 0;
+    let bestScore = localStorage.getItem('bestScore') || 0;
+    let hasWon = false;
+    let isGameOver = false;
+    
+    // 用于追踪方块的唯一ID计数器
+    let tileIdCounter = 0;
+
+    // DOM元素
+    const gridContainer = document.getElementById('grid-container');
+    const tileContainer = document.getElementById('tile-container'); // 新增
+    const scoreElement = document.getElementById('score');
+    const bestScoreElement = document.getElementById('best-score');
+    const overlay = document.getElementById('game-over-overlay');
+    const overlayTitle = document.getElementById('game-over-title');
+    const overlaySubtitle = document.getElementById('game-over-subtitle');
+
+    // 用于计算绝对定位的尺寸变量
+    let cellWidth = 0;
+    let cellHeight = 0;
+    const GAP = 10; // CSS中定义的gap值
+
+    // 初始化游戏
+    function initGame() {
+        // 初始化为空数组 (用 null 表示空位)
+        board = Array(4).fill().map(() => Array(4).fill(null));
+        score = 0;
+        hasWon = false;
+        isGameOver = false;
+        tileIdCounter = 0;
+        overlay.classList.remove('active');
+        
+        bestScoreElement.innerText = bestScore;
+        updateScore(0);
+        
+        createBackgroundGrid();
+        // 确保布局完成后计算尺寸，然后开始游戏
+        setTimeout(() => {
+            calculateDimensions();
+            addRandomTile();
+            addRandomTile();
+            renderBoard();
+        }, 0);
+    }
+
+    // 计算单个格子的宽度和高度，用于绝对定位
+    function calculateDimensions() {
+        const firstCell = document.getElementById('bg-cell-0-0');
+        if (firstCell) {
+            cellWidth = firstCell.offsetWidth;
+            cellHeight = firstCell.offsetHeight;
+        }
+    }
+    // 窗口大小改变时重新计算
+    window.addEventListener('resize', () => {
+        calculateDimensions();
+        renderBoard(); // 重新渲染以更新位置
+    });
+
+    // 创建初始背景网格 (静态)
+    function createBackgroundGrid() {
+        // 清除旧的背景网格，保留 overlay 和 tile-container
+        Array.from(gridContainer.children).forEach(child => {
+            if (child.id !== 'game-over-overlay' && child.id !== 'tile-container') {
+                gridContainer.removeChild(child);
+            }
+        });
+        // 清空移动方块容器
+        tileContainer.innerHTML = '';
+
+        for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) {
+                let cell = document.createElement('div');
+                cell.className = 'grid-cell';
+                cell.id = `bg-cell-${r}-${c}`;
+                // 插入到 tile-container 之前
+                gridContainer.insertBefore(cell, tileContainer);
+            }
+        }
+    }
+
+    // 在随机空位生成新牌
+    function addRandomTile() {
+        let emptyCells = [];
+        for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) {
+                if (board[r][c] === null) {
+                    emptyCells.push({r, c});
+                }
+            }
+        }
+
+        if (emptyCells.length > 0) {
+            let randomCell = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+            let val = Math.random() < 0.9 ? 1 : 2;
+            // 存储对象而不是数字
+            board[randomCell.r][randomCell.c] = {
+                value: val,
+                id: tileIdCounter++, // 分配唯一ID
+                isNew: true, // 标记为新生成，用于动画
+                isMerged: false
+            };
+        }
+    }
+
+    // 获取方块在某个行列的绝对位置坐标
+    function getTilePosition(r, c) {
+        return {
+            top: r * (cellHeight + GAP),
+            left: c * (cellWidth + GAP)
+        };
+    }
+
+    // 核心渲染函数：重构以支持绝对定位和滑动
+    function renderBoard() {
+        // 1. 获取当前DOM中所有已存在的方块
+        const existingDomTiles = Array.from(tileContainer.children);
+        const tilesToKeepIds = new Set();
+
+        // 2. 遍历逻辑棋盘，同步到 DOM
+        for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) {
+                let tileData = board[r][c];
+
+                if (tileData) {
+                    const pos = getTilePosition(r, c);
+                    let tileElement = document.getElementById(`tile-${tileData.id}`);
+
+                    // 如果 DOM 元素不存在，则创建它
+                    if (!tileElement) {
+                        tileElement = document.createElement('div');
+                        tileElement.id = `tile-${tileData.id}`;
+                        tileElement.className = 'tile';
+                        // 设置尺寸
+                        tileElement.style.width = `${cellWidth}px`;
+                        tileElement.style.height = `${cellHeight}px`;
+                        // 设置初始位置 (无过渡)
+                        tileElement.style.top = `${pos.top}px`;
+                        tileElement.style.left = `${pos.left}px`;
+                        tileContainer.appendChild(tileElement);
+
+                        // 如果是新生成的，添加出现动画
+                        if (tileData.isNew) {
+                             tileElement.classList.add('tile-new');
+                             // 动画结束后移除类名
+                             tileElement.addEventListener('animationend', () => {
+                                tileElement.classList.remove('tile-new');
+                             }, {once: true});
+                             tileData.isNew = false; 
+                        }
+                    } else {
+                        // DOM 元素已存在，更新其位置 (CSS transition 会处理滑动动画)
+                        tileElement.style.top = `${pos.top}px`;
+                        tileElement.style.left = `${pos.left}px`;
+                    }
+
+                    // 标记此 ID 需要保留
+                    tilesToKeepIds.add(tileElement.id);
+
+                    // 更新样式和文字
+                    let level = tileData.value;
+                    let style = LEVEL_STYLES[level] || LEVEL_STYLES[0];
+                    tileElement.style.backgroundColor = style.bg;
+                    tileElement.style.color = style.text;
+                    tileElement.style.boxShadow = style.shadow || 'none';
+                    tileElement.innerText = LEVELS[level];
+
+                    // 重置类名并添加字体大小类
+                    tileElement.className = 'tile';
+                    if(style.sizeClass) tileElement.classList.add(...style.sizeClass.split(' '));
+
+                    // 如果是合并产生的，添加合并动画
+                    if(tileData.isMerged) {
+                         tileElement.classList.add('tile-merged');
+                         tileElement.addEventListener('animationend', () => {
+                            tileElement.classList.remove('tile-merged');
+                         }, {once: true});
+                         tileData.isMerged = false;
+                    }
+                }
+            }
+        }
+
+        // 3. 移除逻辑棋盘上已经不存在的 DOM 方块 (即被合并掉的)
+        existingDomTiles.forEach(domTile => {
+            if (!tilesToKeepIds.has(domTile.id)) {
+                // 这里可以添加一个消失动画，为了简化直接移除
+                tileContainer.removeChild(domTile);
+            }
+        });
+    }
+
+    // 更新分数
+    function updateScore(add) {
+        score += add;
+        scoreElement.innerText = score;
+        if (score > bestScore) {
+            bestScore = score;
+            bestScoreElement.innerText = bestScore;
+            localStorage.setItem('bestScore', bestScore);
+        }
+    }
+
+    // 核心逻辑：滑动数组 (过滤掉 null)
+    function slide(row) {
+        let filteredRow = row.filter(tile => tile !== null);
+        let missing = 4 - filteredRow.length;
+        let zeros = Array(missing).fill(null);
+        return filteredRow.concat(zeros);
+    }
+
+    // 核心逻辑：合并数组 (处理对象比较)
+    function combine(row) {
+        let scoreToAdd = 0;
+        for (let i = 0; i < 3; i++) {
+            // 检查相邻位置是否有方块，且值相等
+            if (row[i] !== null && row[i+1] !== null && row[i].value === row[i + 1].value) {
+                let newValue = row[i].value + 1;
+                scoreToAdd += Math.pow(2, newValue);
+
+                // 创建合并后的新方块对象
+                row[i] = {
+                    value: newValue,
+                    id: tileIdCounter++, // 新ID
+                    isNew: false,
+                    isMerged: true // 标记为合并产生，用于动画
+                };
+                // 被合并的位置置空
+                row[i + 1] = null;
+            }
+        }
+        return { newRow: row, scoreToAdd };
+    }
+
+    // 核心逻辑：单行操作 (左滑)
+    function operateRow(row) {
+        row = slide(row);
+        let combineResult = combine(row);
+        row = slide(combineResult.newRow);
+        return { newRow: row, scoreToAdd: combineResult.scoreToAdd };
+    }
+
+    // 深拷贝面板 (拷贝对象结构)
+    function copyBoard() {
+        return board.map(row => row.map(tile => tile ? {...tile} : null));
+    }
+
+    // 比较两个面板的值是否一致
+    function boardsEqual(b1, b2) {
+        for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) {
+                // 比较值是否存在以及值的大小
+                if (b1[r][c]?.value !== b2[r][c]?.value) return false;
+            }
+        }
+        return true;
+    }
+
+    // 翻转面板 (用于右滑)
+    function reverseBoard() {
+        for(let r=0; r<4; r++) {
+            board[r].reverse();
+        }
+    }
+
+    // 旋转面板 (用于上下滑)
+    function transposeBoard() {
+        let newBoard = Array(4).fill().map(() => Array(4).fill(null));
+        for(let r=0; r<4; r++){
+            for(let c=0; c<4; c++){
+                newBoard[r][c] = board[c][r];
+            }
+        }
+        board = newBoard;
+    }
+
+    // 方向处理函数 (逻辑不变)
+    function moveLeft() {
+        let totalScoreAdd = 0;
+        for (let r = 0; r < 4; r++) {
+            let row = board[r];
+            let result = operateRow(row);
+            board[r] = result.newRow;
+            totalScoreAdd += result.scoreToAdd;
+        }
+        return { totalScoreAdd };
+    }
+
+    function moveRight() {
+        reverseBoard();
+        let result = moveLeft();
+        reverseBoard();
+        return result;
+    }
+
+    function moveUp() {
+        transposeBoard();
+        let result = moveLeft();
+        transposeBoard();
+        return result;
+    }
+
+    function moveDown() {
+        transposeBoard();
+        reverseBoard();
+        let result = moveLeft();
+        reverseBoard();
+        transposeBoard();
+        return result;
+    }
+
+    // 执行移动的总控函数
+    function handleMove(direction) {
+        if (isGameOver) return;
+
+        let oldBoard = copyBoard();
+        let moveResult;
+
+        // 每次移动前重置合并标记，避免重复动画
+        board.forEach(row => row.forEach(tile => { if(tile) tile.isMerged = false; }));
+
+        switch (direction) {
+            case 'left': moveResult = moveLeft(); break;
+            case 'right': moveResult = moveRight(); break;
+            case 'up': moveResult = moveUp(); break;
+            case 'down': moveResult = moveDown(); break;
+        }
+
+        // 如果发生了有效移动
+        if (!boardsEqual(oldBoard, board)) {
+            updateScore(moveResult.totalScoreAdd);
+            addRandomTile(); // 生成新方块
+            renderBoard();   // 渲染视图（触发滑动）
+            setTimeout(checkGameStatus, 200); // 等待动画完成后检查状态
+        }
+    }
+
+    // 检查游戏状态
+    function checkGameStatus() {
+        if (!hasWon) {
+            for (let r = 0; r < 4; r++) {
+                for (let c = 0; c < 4; c++) {
+                    if (board[r][c]?.value === 11) {
+                        hasWon = true;
+                        showGameOver(true);
+                        return;
+                    }
+                }
+            }
+        }
+
+        let hasEmpty = false;
+        let canMerge = false;
+
+        for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) {
+                if (board[r][c] === null) {
+                    hasEmpty = true;
+                }
+                // 检查右边
+                if (c < 3 && board[r][c]?.value === board[r][c + 1]?.value && board[r][c] !== null) {
+                    canMerge = true;
+                }
+                // 检查下边
+                if (r < 3 && board[r][c]?.value === board[r + 1][c]?.value && board[r][c] !== null) {
+                    canMerge = true;
+                }
+            }
+        }
+
+        if (!hasEmpty && !canMerge) {
+            isGameOver = true;
+            showGameOver(false);
+        }
+    }
+
+    // 显示结束界面 (逻辑不变)
+    function showGameOver(win) {
+        overlay.classList.add('active');
+        if (win) {
+            overlayTitle.innerText = "成功晋升！";
+            overlayTitle.style.color = "#edc22e";
+            overlaySubtitle.innerText = "恭喜你成为了董事长！";
+            document.getElementById('retry-btn').innerText = "继续巩固权力";
+            document.getElementById('retry-btn').onclick = () => {
+                overlay.classList.remove('active');
+            };
+        } else {
+            overlayTitle.innerText = "职业生涯结束";
+            overlayTitle.style.color = "#776e65";
+            let maxVal = 0;
+            board.flat().forEach(t => { if(t && t.value > maxVal) maxVal = t.value });
+            overlaySubtitle.innerText = `你最终停留在：${LEVELS[maxVal] || '无业'}`;
+            document.getElementById('retry-btn').innerText = "重新找工作";
+            document.getElementById('retry-btn').onclick = initGame;
+        }
+    }
+
+    // 事件监听 - 键盘 (逻辑不变)
+    document.addEventListener('keydown', (e) => {
+        if (isGameOver) return;
+        // 阻止方向键滚动页面
+        if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) {
+             e.preventDefault();
+        }
+        switch (e.key) {
+            case 'ArrowLeft': handleMove('left'); break;
+            case 'ArrowRight': handleMove('right'); break;
+            case 'ArrowUp': handleMove('up'); break;
+            case 'ArrowDown': handleMove('down'); break;
+        }
+    });
+
+    // 事件监听 - 触屏滑动 (逻辑不变)
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    gridContainer.addEventListener('touchstart', (e) => {
+        touchStartX = e.changedTouches[0].screenX;
+        touchStartY = e.changedTouches[0].screenY;
+    }, {passive: false});
+
+    gridContainer.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+    }, {passive: false});
+
+    gridContainer.addEventListener('touchend', (e) => {
+        if (isGameOver) return;
+        let touchEndX = e.changedTouches[0].screenX;
+        let touchEndY = e.changedTouches[0].screenY;
+
+        let dx = touchEndX - touchStartX;
+        let dy = touchEndY - touchStartY;
+
+        if (Math.abs(dx) < 30 && Math.abs(dy) < 30) return;
+
+        if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 0) handleMove('right');
+            else handleMove('left');
+        } else {
+            if (dy > 0) handleMove('down');
+            else handleMove('up');
+        }
+    });
+
+    // 重新开始按钮
+    document.getElementById('restart-btn').addEventListener('click', initGame);
+
+    // 启动游戏
+    initGame();
+
+</script>
+</body>
+</html>
